@@ -54,9 +54,16 @@ pub struct ReadArgs {
 }
 
 #[cw_serde]
+pub enum UpdateMode {
+    Merge,
+    Replace,
+}
+
+#[cw_serde]
 pub struct UpdateArgs {
     pub id: Uint64,
     pub data: serde_json::Value,
+    pub mode: UpdateMode,
 }
 
 #[cw_serde]

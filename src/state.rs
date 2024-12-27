@@ -5,7 +5,7 @@ use serde_json;
 
 use crate::{
     error::ContractError,
-    msg::{CreateArgs, DeleteArgs, InstantiateMsg, UpdateArgs},
+    msg::{CreateArgs, DeleteArgs, InstantiateMsg, UpdateArgs, UpdateMode},
     schema::{EntityProperty, EntitySchema},
 };
 
@@ -134,6 +134,7 @@ impl<'a> ExecuteContext<'a> {
             &serde_json::Value::Object(serde_json::Map::new()),
             &data,
             &self.load_schema()?,
+            None,
         )?;
         Ok(())
     }
@@ -142,11 +143,29 @@ impl<'a> ExecuteContext<'a> {
         &mut self,
         args: UpdateArgs,
     ) -> Result<(), ContractError> {
-        let UpdateArgs { id, data: new_data } = args;
-        if let Ok(old_data) = ENTITY.load(self.deps.storage, id.u64()) {
+        let UpdateArgs {
+            id,
+            data: new_data,
+            mode,
+        } = args;
+        if let Ok(mut curr_data) = ENTITY.load(self.deps.storage, id.u64()) {
             let schema = self.load_schema()?;
-            self.update_indices(&id, &old_data, &new_data, &schema)?;
+            self.update_indices(&id, &curr_data, &new_data, &schema, Some(mode.to_owned()))?;
             UPDATED_AT.save(self.deps.storage, id.u64(), &self.env.block.time)?;
+            match mode {
+                UpdateMode::Merge => {
+                    let curr_obj = curr_data.as_object_mut().unwrap();
+                    for prop in schema.properties.iter() {
+                        if let Some(v) = new_data.get(&prop.name) {
+                            prop.validate(&v)?;
+                            curr_obj.insert(prop.name.to_owned(), v.to_owned());
+                        }
+                    }
+                    curr_obj.extend(new_data.as_object().unwrap().clone());
+                    ENTITY.save(self.deps.storage, id.u64(), &curr_data)?;
+                },
+                UpdateMode::Replace => ENTITY.save(self.deps.storage, id.u64(), &new_data)?,
+            };
             Ok(())
         } else {
             Err(ContractError::NotFound {
@@ -212,12 +231,15 @@ impl<'a> ExecuteContext<'a> {
         old_entity: &serde_json::Value,
         new_entity: &serde_json::Value,
         schema: &EntitySchema,
+        mode: Option<UpdateMode>,
     ) -> Result<(), ContractError> {
-        let old_entity_value_map = old_entity.as_object().ok_or_else(|| ContractError::ValidationError {
+        let mode = mode.unwrap_or(UpdateMode::Replace);
+
+        let old_values = old_entity.as_object().ok_or_else(|| ContractError::ValidationError {
             reason: "existing entity is not an object".to_owned(),
         })?;
 
-        let entity_value_map = new_entity.as_object().ok_or_else(|| ContractError::ValidationError {
+        let new_values = new_entity.as_object().ok_or_else(|| ContractError::ValidationError {
             reason: "updated entity is not an object".to_owned(),
         })?;
 
@@ -229,22 +251,22 @@ impl<'a> ExecuteContext<'a> {
                 ..
             } = prop;
             let index_name = format!("_ix_{}", name);
-            if let Some(value) = entity_value_map.get(name) {
+            if let Some(new_value) = new_values.get(name) {
                 // Get or create index
                 if indexed.unwrap_or(false) {
                     let index = PropertyIndex::new(&index_name);
                     // Remove old node in index
-                    if let Some(old_value) = old_entity_value_map.get(name) {
-                        if *old_value == *value {
+                    if let Some(old_value) = old_values.get(name) {
+                        if *old_value == *new_value {
                             continue; // Skip updating
                         }
                         index.remove(self.deps.storage, (&prop.to_bytes(old_value)?, id.u64()));
                     }
                     // Set new node in index
-                    let bytes = prop.to_bytes(value)?;
-                    index.save(self.deps.storage, (&bytes, id.u64()), &0)?;
+                    let new_key = prop.to_bytes(new_value)?;
+                    index.save(self.deps.storage, (&new_key, id.u64()), &1)?;
                 }
-            } else if required.unwrap_or(false) {
+            } else if mode == UpdateMode::Replace && required.unwrap_or(false) {
                 return Err(ContractError::ValidationError {
                     reason: format!("{} required", name),
                 });
