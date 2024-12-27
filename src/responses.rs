@@ -1,6 +1,15 @@
 use cosmwasm_schema::cw_serde;
-
-use crate::state::Config;
+use cosmwasm_std::Uint64;
+use serde_json;
 
 #[cw_serde]
-pub struct ConfigResponse(pub Config);
+pub struct Entity {
+    pub id: Uint64,
+    pub data: Option<serde_json::Value>,
+}
+
+#[cw_serde]
+pub struct ReadResponse {
+    pub entities: Vec<Entity>,
+    pub cursor: Option<(Vec<u8>, Uint64)>,
+}

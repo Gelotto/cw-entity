@@ -1,13 +1,15 @@
 use crate::error::ContractError;
-use crate::execute::set_config::exec_set_config;
+use crate::execute::create::exec_create;
+use crate::execute::delete::exec_delete;
+use crate::execute::update::exec_update;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
-use crate::query::config::query_config;
+use crate::query::read::query_read;
 use crate::state::{ExecuteContext, QueryContext};
 use cosmwasm_std::{entry_point, to_json_binary, Env};
 use cosmwasm_std::{Binary, Deps, DepsMut, MessageInfo, Response};
 use cw2::set_contract_version;
 
-const CONTRACT_NAME: &str = "crates.io:cw-contract";
+const CONTRACT_NAME: &str = "crates.io:cw-entity";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[entry_point]
@@ -18,7 +20,7 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
-    let mut ctx = ExecuteContext { deps, env, info };
+    let mut ctx = ExecuteContext::new(deps, env, info);
     ctx.instantiate(msg)
 }
 
@@ -29,9 +31,11 @@ pub fn execute(
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
-    let ctx = ExecuteContext { deps, env, info };
+    let ctx = ExecuteContext::new(deps, env, info);
     match msg {
-        ExecuteMsg::SetConfig(config) => exec_set_config(ctx, config),
+        ExecuteMsg::Create(args) => exec_create(ctx, args),
+        ExecuteMsg::Update(args) => exec_update(ctx, args),
+        ExecuteMsg::Delete(args) => exec_delete(ctx, args),
     }
 }
 
@@ -43,7 +47,7 @@ pub fn query(
 ) -> Result<Binary, ContractError> {
     let ctx = QueryContext { deps, env };
     let result = match msg {
-        QueryMsg::Config {} => to_json_binary(&query_config(ctx)?),
+        QueryMsg::Read(args) => to_json_binary(&query_read(ctx, args)?),
     }?;
     Ok(result)
 }

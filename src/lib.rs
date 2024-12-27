@@ -7,6 +7,7 @@ pub mod msg;
 #[cfg(not(feature = "library"))]
 pub mod query;
 pub mod responses;
+pub mod schema;
 pub mod state;
 
 #[cfg(not(target_arch = "wasm32"))]
