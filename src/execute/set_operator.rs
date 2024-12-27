@@ -1,7 +1,4 @@
-use crate::{
-    error::ContractError,
-    state::{CollectionMetadata, ExecuteContext},
-};
+use crate::{error::ContractError, state::ExecuteContext};
 use cosmwasm_std::{attr, Addr, Response};
 
 pub fn exec_set_operator(

@@ -37,7 +37,13 @@ pub enum IndexBound {
 #[cw_serde]
 pub enum ReadTarget {
     Ids(Vec<Uint64>),
-    Index {
+    Equals {
+        property: String,
+        value: serde_json::Value,
+        cursor: Option<Binary>,
+        limit: Option<u8>,
+    },
+    Range {
         property: String,
         cursor: Option<Binary>,
         start: Option<IndexBound>,

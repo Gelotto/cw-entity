@@ -2,7 +2,7 @@ use crate::{
     error::ContractError,
     state::{CollectionMetadata, ExecuteContext},
 };
-use cosmwasm_std::{attr, Addr, Response};
+use cosmwasm_std::{attr, Response};
 
 pub fn exec_set_metadata(
     mut ctx: ExecuteContext,

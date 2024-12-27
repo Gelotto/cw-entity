@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::mem::size_of;
 
-use cosmwasm_std::{Api, Binary, Order, Storage, Uint64};
+use cosmwasm_std::{Binary, Order, Storage, Uint64};
 use cw_storage_plus::Bound;
 
 use serde_json;
@@ -18,15 +18,32 @@ pub const MAX_PAGE_SIZE: u8 = 50;
 
 pub fn query_read(
     ctx: QueryContext,
-    args: ReadArgs,
+    mut args: ReadArgs,
 ) -> Result<ReadResponse, ContractError> {
     let QueryContext { deps, .. } = ctx;
-    read(deps.storage, deps.api, args)
+    if let ReadTarget::Equals {
+        property,
+        value,
+        limit,
+        cursor,
+    } = &args.target
+    {
+        let start = Some(IndexBound::Inclusive(value.to_owned()));
+        args.target = ReadTarget::Range {
+            property: property.to_owned(),
+            cursor: cursor.to_owned(),
+            limit: limit.to_owned(),
+            stop: start.to_owned(),
+            start,
+        };
+        read(deps.storage, args)
+    } else {
+        read(deps.storage, args)
+    }
 }
 
 pub fn read(
     storage: &dyn Storage,
-    api: &dyn Api,
     args: ReadArgs,
 ) -> Result<ReadResponse, ContractError> {
     let ReadArgs { target, desc, select } = args;
@@ -43,7 +60,7 @@ pub fn read(
             }
             ids = target_ids
         },
-        ReadTarget::Index {
+        ReadTarget::Range {
             property: prop_name,
             cursor,
             limit,
@@ -114,6 +131,11 @@ pub fn read(
                 next_cursor_info = Some((bytes, id));
                 ids.push(id.into());
             }
+        },
+        _ => {
+            return Err(ContractError::Unexpected {
+                reason: "Eq not supported by range".to_owned(),
+            })
         },
     };
 
