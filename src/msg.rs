@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr, Uint64};
+use cosmwasm_std::{Addr, Binary, Uint64};
 use serde_json;
 
 #[allow(unused_imports)]
@@ -36,7 +36,7 @@ pub enum ReadTarget {
     Ids(Vec<Uint64>),
     Index {
         property: String,
-        cursor: Option<String>,
+        cursor: Option<Binary>,
         start: Option<IndexBound>,
         stop: Option<IndexBound>,
         limit: Option<u8>,

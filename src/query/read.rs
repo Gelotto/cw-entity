@@ -1,8 +1,7 @@
 use std::marker::PhantomData;
 use std::mem::size_of;
 
-use base64::prelude::*;
-use cosmwasm_std::{Api, Order, StdError, Storage, Uint64};
+use cosmwasm_std::{Api, Binary, Order, Storage, Uint64};
 use cw_storage_plus::Bound;
 
 use serde_json;
@@ -67,23 +66,13 @@ pub fn read(
             let mut tmp_start: Box<Vec<u8>> = Box::new(vec![]);
             let mut tmp_stop: Box<Vec<u8>> = Box::new(vec![]);
 
-            let cursor_bytes = if let Some(b64_cursor) = cursor {
-                let bytes = BASE64_STANDARD
-                    .decode(b64_cursor)
-                    .map_err(|_| ContractError::Std(StdError::generic_err("cursor b64 decode failed")))?;
-                Some(bytes)
-            } else {
-                None
-            };
-
-            let mut min = cursor_bytes
+            let mut min = cursor
                 .and_then(|cursor_bytes| {
                     let id_size = size_of::<u64>();
-                    let key_bytes = prop.pad(cursor_bytes[..cursor_bytes.len() - id_size].to_vec()).unwrap();
                     let id_bytes = cursor_bytes[cursor_bytes.len() - id_size..].try_into().unwrap();
+                    let key = prop.pad(cursor_bytes[..cursor_bytes.len() - id_size].to_vec()).unwrap();
                     let id = u64::from_le_bytes(id_bytes);
-                    api.debug(format!(">>> {:?} {:?}", key_bytes, id).as_str());
-                    *tmp_cursor = key_bytes;
+                    *tmp_cursor = key;
                     Some(Bound::Exclusive((((*tmp_cursor).as_slice(), id), PhantomData)))
                 })
                 .or_else(|| {
@@ -167,7 +156,7 @@ pub fn read(
         cursor: next_cursor_info.and_then(|(key, id)| {
             let mut bytes = EntityProperty::unpad(key);
             bytes.extend(id.to_le_bytes());
-            Some(BASE64_STANDARD.encode(bytes))
+            Some(Binary::from(bytes))
         }),
     })
 }
