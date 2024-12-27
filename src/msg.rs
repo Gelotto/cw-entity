@@ -2,7 +2,6 @@ use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Addr, Uint64};
 use serde_json;
 
-use crate::state::Config;
 #[allow(unused_imports)]
 use crate::{responses::ReadResponse, schema::EntitySchema};
 
@@ -37,16 +36,16 @@ pub enum ReadTarget {
     Ids(Vec<Uint64>),
     Index {
         property: String,
-        cursor: Option<(Vec<u8>, Uint64)>,
+        cursor: Option<String>,
         start: Option<IndexBound>,
         stop: Option<IndexBound>,
+        limit: Option<u8>,
     },
 }
 
 #[cw_serde]
 pub struct ReadArgs {
     pub target: ReadTarget,
-    pub limit: Option<u8>,
     pub desc: Option<bool>,
     pub select: Option<Vec<String>>,
 }

@@ -1,4 +1,5 @@
 use cosmwasm_schema::cw_serde;
+use std::mem::size_of;
 
 use crate::error::ContractError;
 
@@ -54,18 +55,9 @@ impl EntityProperty {
     ) -> Result<Vec<u8>, ContractError> {
         // NOTE: This assumes that we've already validated.
         Ok(match self.value {
-            EntityPropertyParams::String { max_byte_size } => {
-                let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_STRING) as usize;
-                self.pad(value.as_str().unwrap().as_bytes().to_vec(), padding)?
-            },
-            EntityPropertyParams::Array { max_byte_size } => {
-                let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_ARRAY) as usize;
-                self.pad(value.to_string().as_bytes().to_vec(), padding)?
-            },
-            EntityPropertyParams::Object { max_byte_size } => {
-                let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_OBJECT) as usize;
-                self.pad(value.to_string().as_bytes().to_vec(), padding)?
-            },
+            EntityPropertyParams::String { .. } => self.pad(value.as_str().unwrap().as_bytes().to_vec())?,
+            EntityPropertyParams::Array { .. } => self.pad(value.to_string().as_bytes().to_vec())?,
+            EntityPropertyParams::Object { .. } => self.pad(value.to_string().as_bytes().to_vec())?,
             EntityPropertyParams::U8 {} => value.as_u64().unwrap().clamp(0, u8::MAX as u64).to_le_bytes()[..1].to_vec(),
             EntityPropertyParams::U16 {} => {
                 value.as_u64().unwrap().clamp(0, u16::MAX as u64).to_le_bytes()[..2].to_vec()
@@ -74,7 +66,7 @@ impl EntityProperty {
                 value.as_u64().unwrap().clamp(0, u32::MAX as u64).to_le_bytes()[..4].to_vec()
             },
             EntityPropertyParams::U64 {} => value.as_u64().unwrap().clamp(0, u64::MAX).to_le_bytes()[..8].to_vec(),
-            EntityPropertyParams::U128 {} => self.pad(value.as_str().unwrap().as_bytes().to_vec(), 16)?,
+            EntityPropertyParams::U128 {} => self.pad(value.as_str().unwrap().as_bytes().to_vec())?,
             EntityPropertyParams::I8 {} => value.as_i64().unwrap().clamp(0, i8::MAX as i64).to_le_bytes()[..1].to_vec(),
             EntityPropertyParams::I16 {} => {
                 value.as_i64().unwrap().clamp(0, i16::MAX as i64).to_le_bytes()[..2].to_vec()
@@ -83,30 +75,42 @@ impl EntityProperty {
                 value.as_i64().unwrap().clamp(0, i32::MAX as i64).to_le_bytes()[..4].to_vec()
             },
             EntityPropertyParams::I64 {} => value.as_i64().unwrap().clamp(0, i64::MAX).to_le_bytes()[..8].to_vec(),
-            EntityPropertyParams::I128 {} => self.pad(value.as_str().unwrap().as_bytes().to_vec(), 16)?,
+            EntityPropertyParams::I128 {} => self.pad(value.as_str().unwrap().as_bytes().to_vec())?,
             EntityPropertyParams::Bool {} => vec![if value.as_bool().unwrap() { 1u8 } else { 0u8 }],
         })
     }
 
-    // fn unpad(
-    //     &self,
-    //     bytes: Vec<u8>,
-    // ) -> Vec<u8> {
-    //     let len = bytes.len();
-    //     let mut i = len - 1;
-    //     let mut bytes = bytes;
-    //     while i != 0 && bytes[i] == 0 {
-    //         bytes.pop();
-    //         i -= 1;
-    //     }
-    //     bytes
-    // }
+    pub fn unpad(bytes: Vec<u8>) -> Vec<u8> {
+        let len = bytes.len();
+        let mut i = len - 1;
+        let mut bytes = bytes;
+        while i != 0 && bytes[i] == 0 {
+            bytes.pop();
+            i -= 1;
+        }
+        bytes
+    }
 
-    fn pad(
+    pub fn pad(
         &self,
         vec: Vec<u8>,
-        target_length: usize,
     ) -> Result<Vec<u8>, ContractError> {
+        let target_length = match &self.value {
+            EntityPropertyParams::Array { max_byte_size } => max_byte_size.unwrap_or(DEFAULT_PADDING_ARRAY) as usize,
+            EntityPropertyParams::Object { max_byte_size } => max_byte_size.unwrap_or(DEFAULT_PADDING_OBJECT) as usize,
+            EntityPropertyParams::String { max_byte_size } => max_byte_size.unwrap_or(DEFAULT_PADDING_STRING) as usize,
+            EntityPropertyParams::U8 {} => size_of::<u8>(),
+            EntityPropertyParams::U16 {} => size_of::<u16>(),
+            EntityPropertyParams::U32 {} => size_of::<u32>(),
+            EntityPropertyParams::U64 {} => size_of::<u64>(),
+            EntityPropertyParams::U128 {} => size_of::<u128>(),
+            EntityPropertyParams::I8 {} => size_of::<i8>(),
+            EntityPropertyParams::I16 {} => size_of::<i16>(),
+            EntityPropertyParams::I32 {} => size_of::<i32>(),
+            EntityPropertyParams::I64 {} => size_of::<i64>(),
+            EntityPropertyParams::I128 {} => size_of::<i16>(),
+            EntityPropertyParams::Bool {} => size_of::<bool>(),
+        } as usize;
         let n = target_length.saturating_sub(vec.len());
         let padded_vec = {
             if n > 0 {
@@ -131,14 +135,14 @@ impl EntityProperty {
         value: &serde_json::Value,
     ) -> Result<(), ContractError> {
         match self.value {
-            EntityPropertyParams::String { max_byte_size } => {
-                self.validate_string(value, max_byte_size)?;
+            EntityPropertyParams::String { .. } => {
+                self.validate_string(value)?;
             },
-            EntityPropertyParams::Object { max_byte_size } => {
-                self.validate_object(value, max_byte_size)?;
+            EntityPropertyParams::Object { .. } => {
+                self.validate_object(value)?;
             },
-            EntityPropertyParams::Array { max_byte_size } => {
-                self.validate_array(value, max_byte_size)?;
+            EntityPropertyParams::Array { .. } => {
+                self.validate_array(value)?;
             },
             EntityPropertyParams::Bool {} => {
                 self.validate_bool(value)?;
@@ -189,42 +193,36 @@ impl EntityProperty {
     fn validate_string(
         &self,
         value: &serde_json::Value,
-        max_byte_size: Option<u16>,
     ) -> Result<(), ContractError> {
         if !value.is_string() {
             return self.validation_error("expected string");
         }
         // Check size in bytes relative to capacity, raising error as side-effect
-        let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_STRING) as usize;
-        self.pad(value.to_string().as_bytes().to_vec(), padding)?;
+        self.pad(value.to_string().as_bytes().to_vec())?;
         Ok(())
     }
 
     fn validate_object(
         &self,
         value: &serde_json::Value,
-        max_byte_size: Option<u16>,
     ) -> Result<(), ContractError> {
         if !value.is_object() {
             return self.validation_error("expected object");
         }
         // Check size in bytes relative to capacity, raising error as side-effect
-        let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_OBJECT) as usize;
-        self.pad(value.to_string().as_bytes().to_vec(), padding)?;
+        self.pad(value.to_string().as_bytes().to_vec())?;
         Ok(())
     }
 
     fn validate_array(
         &self,
         value: &serde_json::Value,
-        max_byte_size: Option<u16>,
     ) -> Result<(), ContractError> {
         if !value.is_array() {
             return self.validation_error("expected array");
         }
         // Check size in bytes relative to capacity, raising error as side-effect
-        let padding = max_byte_size.unwrap_or(DEFAULT_PADDING_ARRAY) as usize;
-        self.pad(value.to_string().as_bytes().to_vec(), padding)?;
+        self.pad(value.to_string().as_bytes().to_vec())?;
         Ok(())
     }
 

@@ -1,13 +1,17 @@
 use std::marker::PhantomData;
+use std::mem::size_of;
 
-use cosmwasm_std::{Order, Storage, Uint64};
+use base64::prelude::*;
+use cosmwasm_std::{Api, Order, StdError, Storage, Uint64};
 use cw_storage_plus::Bound;
+
 use serde_json;
 
 use crate::{
     error::ContractError,
     msg::{IndexBound, ReadArgs, ReadTarget},
     responses::{Entity, ReadResponse},
+    schema::EntityProperty,
     state::{PropertyIndex, QueryContext, ENTITY, SCHEMA},
 };
 
@@ -18,25 +22,20 @@ pub fn query_read(
     args: ReadArgs,
 ) -> Result<ReadResponse, ContractError> {
     let QueryContext { deps, .. } = ctx;
-    read(deps.storage, args)
+    read(deps.storage, deps.api, args)
 }
 
 pub fn read(
     storage: &dyn Storage,
+    api: &dyn Api,
     args: ReadArgs,
 ) -> Result<ReadResponse, ContractError> {
-    let ReadArgs {
-        target,
-        limit,
-        desc,
-        select,
-    } = args;
+    let ReadArgs { target, desc, select } = args;
     let desc = desc.unwrap_or_default();
-    let limit = limit.unwrap_or(10).min(MAX_PAGE_SIZE) as usize;
     let order = if desc { Order::Descending } else { Order::Ascending };
 
-    let mut ids: Vec<Uint64> = Vec::with_capacity(limit);
-    let mut next_cursor: Option<(Vec<u8>, u64)> = None;
+    let mut ids: Vec<Uint64> = Vec::with_capacity(MAX_PAGE_SIZE as usize);
+    let mut next_cursor_info: Option<(Vec<u8>, u64)> = None;
 
     match target {
         ReadTarget::Ids(mut target_ids) => {
@@ -48,26 +47,44 @@ pub fn read(
         ReadTarget::Index {
             property: prop_name,
             cursor,
+            limit,
             start,
             stop,
         } => {
-            let schema = SCHEMA.load(storage)?;
+            let limit = limit.unwrap_or(10).min(MAX_PAGE_SIZE) as usize;
+
             let index_name = format!("_ix_{}", prop_name);
             let index = PropertyIndex::new(index_name.as_str());
+
+            let schema = SCHEMA.load(storage)?;
             let prop = schema
                 .properties
                 .iter()
                 .find(|p| p.name == prop_name)
                 .ok_or_else(|| ContractError::ValidationError { reason: format!("") })?;
 
-            let mut tmp: Box<Vec<u8>> = Box::new(vec![]);
+            let mut tmp_cursor: Box<Vec<u8>> = Box::new(vec![]);
             let mut tmp_start: Box<Vec<u8>> = Box::new(vec![]);
             let mut tmp_stop: Box<Vec<u8>> = Box::new(vec![]);
 
-            let mut min = cursor
-                .and_then(|(bytes_vec, id)| {
-                    *tmp = bytes_vec;
-                    Some(Bound::Inclusive((((*tmp).as_slice(), id.u64()), PhantomData)))
+            let cursor_bytes = if let Some(b64_cursor) = cursor {
+                let bytes = BASE64_STANDARD
+                    .decode(b64_cursor)
+                    .map_err(|_| ContractError::Std(StdError::generic_err("cursor b64 decode failed")))?;
+                Some(bytes)
+            } else {
+                None
+            };
+
+            let mut min = cursor_bytes
+                .and_then(|cursor_bytes| {
+                    let id_size = size_of::<u64>();
+                    let key_bytes = prop.pad(cursor_bytes[..cursor_bytes.len() - id_size].to_vec()).unwrap();
+                    let id_bytes = cursor_bytes[cursor_bytes.len() - id_size..].try_into().unwrap();
+                    let id = u64::from_le_bytes(id_bytes);
+                    api.debug(format!(">>> {:?} {:?}", key_bytes, id).as_str());
+                    *tmp_cursor = key_bytes;
+                    Some(Bound::Exclusive((((*tmp_cursor).as_slice(), id), PhantomData)))
                 })
                 .or_else(|| {
                     start.and_then(|b| {
@@ -105,7 +122,7 @@ pub fn read(
 
             for result in index.keys(storage, min, max, order).take(limit) {
                 let (bytes, id) = result?;
-                next_cursor = Some((bytes, id));
+                next_cursor_info = Some((bytes, id));
                 ids.push(id.into());
             }
         },
@@ -146,7 +163,11 @@ pub fn read(
 
     // Return results and the next cursor
     Ok(ReadResponse {
-        cursor: next_cursor.and_then(|(vec, id)| Some((vec, Uint64::from(id)))),
         entities,
+        cursor: next_cursor_info.and_then(|(key, id)| {
+            let mut bytes = EntityProperty::unpad(key);
+            bytes.extend(id.to_le_bytes());
+            Some(BASE64_STANDARD.encode(bytes))
+        }),
     })
 }

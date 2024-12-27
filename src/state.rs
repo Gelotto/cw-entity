@@ -62,13 +62,19 @@ impl<'a> ExecuteContext<'a> {
         &mut self,
         args: CreateArgs,
     ) -> Result<(), ContractError> {
-        let CreateArgs { id, data: entity } = args;
+        let CreateArgs { id, data } = args;
         if ENTITY.has(self.deps.storage, id.u64()) {
             return Err(ContractError::NotAuthorized {
                 reason: format!("entity {} already exists", id),
             });
         }
-        ENTITY.save(self.deps.storage, id.u64(), &entity)?;
+        ENTITY.save(self.deps.storage, id.u64(), &data)?;
+        self.update_indices(
+            &id,
+            &serde_json::Value::Object(serde_json::Map::new()),
+            &data,
+            &self.load_schema()?,
+        )?;
         Ok(())
     }
 

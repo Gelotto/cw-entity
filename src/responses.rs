@@ -11,5 +11,5 @@ pub struct Entity {
 #[cw_serde]
 pub struct ReadResponse {
     pub entities: Vec<Entity>,
-    pub cursor: Option<(Vec<u8>, Uint64)>,
+    pub cursor: Option<String>,
 }
