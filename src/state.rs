@@ -1,24 +1,31 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Deps, DepsMut, Env, MessageInfo, Response, Uint64};
+use cosmwasm_std::{Addr, Deps, DepsMut, Env, MessageInfo, Response, Timestamp, Uint64};
 use cw_storage_plus::{Item, Map};
 use serde_json;
 
 use crate::{
     error::ContractError,
-    msg::{CreateArgs, InstantiateMsg},
+    msg::{CreateArgs, DeleteArgs, InstantiateMsg, UpdateArgs},
     schema::{EntityProperty, EntitySchema},
 };
 
 pub type ObjectId = u64;
 pub type PropertyIndex<'a> = Map<'a, (&'a [u8], ObjectId), u8>;
 
-pub const CONFIG: Item<Config> = Item::new("config");
-pub const OPERATOR: Item<Addr> = Item::new("operator");
+pub const OPERATOR: Item<Addr> = Item::new("op");
+pub const METADATA: Item<CollectionMetadata> = Item::new("meta");
 pub const SCHEMA: Item<EntitySchema> = Item::new("schema");
-pub const ENTITY: Map<ObjectId, serde_json::Value> = Map::new("entity");
+pub const CREATED_AT: Map<ObjectId, Timestamp> = Map::new("tc");
+pub const UPDATED_AT: Map<ObjectId, Timestamp> = Map::new("tu");
+pub const ENTITY: Map<ObjectId, serde_json::Value> = Map::new("entities");
+pub const COUNT: Item<u32> = Item::new("n");
 
 #[cw_serde]
-pub struct Config {}
+pub struct CollectionMetadata {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub website: Option<String>,
+}
 
 pub struct ExecuteContext<'a> {
     pub deps: DepsMut<'a>,
@@ -44,8 +51,22 @@ impl<'a> ExecuteContext<'a> {
         &mut self,
         msg: InstantiateMsg,
     ) -> Result<Response, ContractError> {
-        let InstantiateMsg { operator, schema } = msg;
+        let InstantiateMsg {
+            operator,
+            schema,
+            metadata,
+        } = msg;
 
+        COUNT.save(self.deps.storage, &0)?;
+        SCHEMA.save(self.deps.storage, &schema)?;
+        METADATA.save(
+            self.deps.storage,
+            &metadata.unwrap_or_else(|| CollectionMetadata {
+                name: None,
+                description: None,
+                website: None,
+            }),
+        )?;
         OPERATOR.save(
             self.deps.storage,
             &self
@@ -54,23 +75,62 @@ impl<'a> ExecuteContext<'a> {
                 .addr_validate(operator.unwrap_or(self.info.sender.clone()).as_str())?,
         )?;
 
-        SCHEMA.save(self.deps.storage, &schema)?;
-
         Ok(Response::new().add_attribute("action", "instantiate"))
     }
+
+    pub fn set_collection_metadata(
+        &mut self,
+        metadata: &CollectionMetadata,
+    ) -> Result<(), ContractError> {
+        Ok(METADATA.save(self.deps.storage, metadata)?)
+    }
+
+    pub fn set_operator(
+        &mut self,
+        new_operator: &Addr,
+    ) -> Result<(), ContractError> {
+        OPERATOR.save(
+            self.deps.storage,
+            &self
+                .deps
+                .api
+                .addr_validate(new_operator.as_str())
+                .map_err(|_| ContractError::ValidationError {
+                    reason: "invalid new operator address".to_owned(),
+                })?,
+        )?;
+        Ok(())
+    }
+
+    pub fn require_operator(&self) -> Result<(), ContractError> {
+        if self.info.sender != OPERATOR.load(self.deps.storage)? {
+            return Err(ContractError::NotAuthorized {
+                reason: "operator required".to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn create_entity(
         &mut self,
         args: CreateArgs,
     ) -> Result<(), ContractError> {
         let CreateArgs { id, data } = args;
-        if ENTITY.has(self.deps.storage, id.u64()) {
+        let id = id.u64();
+        if ENTITY.has(self.deps.storage, id) {
             return Err(ContractError::NotAuthorized {
                 reason: format!("entity {} already exists", id),
             });
         }
-        ENTITY.save(self.deps.storage, id.u64(), &data)?;
+        ENTITY.save(self.deps.storage, id, &data)?;
+        CREATED_AT.save(self.deps.storage, id, &self.env.block.time)?;
+        COUNT.update(self.deps.storage, |x| -> Result<_, ContractError> {
+            x.checked_add(1).ok_or_else(|| ContractError::Unexpected {
+                reason: "collection max size reached".to_owned(),
+            })
+        })?;
         self.update_indices(
-            &id,
+            &id.into(),
             &serde_json::Value::Object(serde_json::Map::new()),
             &data,
             &self.load_schema()?,
@@ -78,8 +138,72 @@ impl<'a> ExecuteContext<'a> {
         Ok(())
     }
 
+    pub fn update_entity(
+        &mut self,
+        args: UpdateArgs,
+    ) -> Result<(), ContractError> {
+        let UpdateArgs { id, data: new_data } = args;
+        if let Ok(old_data) = ENTITY.load(self.deps.storage, id.u64()) {
+            let schema = self.load_schema()?;
+            self.update_indices(&id, &old_data, &new_data, &schema)?;
+            UPDATED_AT.save(self.deps.storage, id.u64(), &self.env.block.time)?;
+            Ok(())
+        } else {
+            Err(ContractError::NotFound {
+                reason: format!("entity {} not found", id.u64()),
+            })
+        }
+    }
+
+    pub fn delete_entity(
+        &mut self,
+        args: DeleteArgs,
+    ) -> Result<(), ContractError> {
+        let DeleteArgs { id } = args;
+        if let Ok(data) = ENTITY.load(self.deps.storage, id.u64()) {
+            let schema = self.load_schema()?;
+            self.remove_entity_from_indices(id.u64(), &schema, &data)?;
+            ENTITY.remove(self.deps.storage, id.u64());
+            UPDATED_AT.remove(self.deps.storage, id.u64());
+            CREATED_AT.remove(self.deps.storage, id.u64());
+            COUNT.update(self.deps.storage, |x| -> Result<_, ContractError> {
+                x.checked_sub(1).ok_or_else(|| ContractError::Unexpected {
+                    reason: "collection count already zero".to_owned(),
+                })
+            })?;
+            Ok(())
+        } else {
+            Err(ContractError::NotFound {
+                reason: format!("entity {} not found", id.u64()),
+            })
+        }
+    }
+
     pub fn load_schema(&self) -> Result<EntitySchema, ContractError> {
         Ok(SCHEMA.load(self.deps.storage)?)
+    }
+
+    fn remove_entity_from_indices(
+        &mut self,
+        id: ObjectId,
+        schema: &EntitySchema,
+        data: &serde_json::Value,
+    ) -> Result<(), ContractError> {
+        let values = data.as_object().ok_or_else(|| ContractError::Unexpected {
+            reason: "entity data not an object".to_owned(),
+        })?;
+        // Remove all props from index if any
+        for prop in schema.properties.iter() {
+            let EntityProperty { name, .. } = prop;
+            let index_name = format!("_ix_{}", name);
+            if let Some(value) = values.get(name) {
+                // Get or create index
+                let index = PropertyIndex::new(&index_name);
+                // Remove from index
+                index.remove(self.deps.storage, (&prop.to_bytes(value)?, id));
+            }
+        }
+        Ok(())
     }
 
     pub fn update_indices(

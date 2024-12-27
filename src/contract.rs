@@ -3,6 +3,7 @@ use crate::execute::create::exec_create;
 use crate::execute::delete::exec_delete;
 use crate::execute::update::exec_update;
 use crate::msg::{ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::query::info::query_info;
 use crate::query::read::query_read;
 use crate::state::{ExecuteContext, QueryContext};
 use cosmwasm_std::{entry_point, to_json_binary, Env};
@@ -47,6 +48,7 @@ pub fn query(
 ) -> Result<Binary, ContractError> {
     let ctx = QueryContext { deps, env };
     let result = match msg {
+        QueryMsg::Info {} => to_json_binary(&query_info(ctx)?),
         QueryMsg::Read(args) => to_json_binary(&query_read(ctx, args)?),
     }?;
     Ok(result)

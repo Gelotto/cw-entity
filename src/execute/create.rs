@@ -8,6 +8,7 @@ pub fn exec_create(
     let ExecuteContext { .. } = ctx;
     let id = args.id.clone();
 
+    ctx.require_operator()?;
     ctx.create_entity(args)?;
 
     Ok(Response::new().add_attributes(vec![attr("action", "create"), attr("id", id)]))

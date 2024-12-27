@@ -3,12 +3,15 @@ use cosmwasm_std::{Addr, Binary, Uint64};
 use serde_json;
 
 #[allow(unused_imports)]
-use crate::{responses::ReadResponse, schema::EntitySchema};
+use crate::responses::{InfoResponse, ReadResponse};
+use crate::schema::EntitySchema;
+use crate::state::CollectionMetadata;
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub operator: Option<Addr>,
     pub schema: EntitySchema,
+    pub operator: Option<Addr>,
+    pub metadata: Option<CollectionMetadata>,
 }
 
 #[cw_serde]
@@ -52,12 +55,13 @@ pub struct ReadArgs {
 
 #[cw_serde]
 pub struct UpdateArgs {
-    pub id: String,
+    pub id: Uint64,
+    pub data: serde_json::Value,
 }
 
 #[cw_serde]
 pub struct DeleteArgs {
-    pub id: String,
+    pub id: Uint64,
 }
 
 #[cw_serde]
@@ -65,6 +69,9 @@ pub struct DeleteArgs {
 pub enum QueryMsg {
     #[returns(Option<ReadResponse>)]
     Read(ReadArgs),
+
+    #[returns(Option<InfoResponse>)]
+    Info {},
 }
 
 #[cw_serde]
